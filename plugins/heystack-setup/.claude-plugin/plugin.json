@@ -1,0 +1,9 @@
+{
+  "name": "heystack-setup",
+  "description": "Set up Heystack observability — detects framework + package manager and wires the correct @heystack/otel runtime entry (Workers/Next/Node).",
+  "version": "0.1.0",
+  "author": { "name": "Heystack" },
+  "license": "MIT",
+  "homepage": "https://heystack.dev",
+  "keywords": ["heystack", "observability", "opentelemetry"]
+}

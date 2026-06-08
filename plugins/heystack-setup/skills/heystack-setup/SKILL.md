@@ -95,6 +95,20 @@ This bundles auto-instrumentations (HTTP, common libs) and registers a SIGTERM/S
 
 > Tip for entry-ordering in Node: if your build can't guarantee this is first, use `node --import` with a small `heystack.mjs` that calls `initHeystack`, or your framework's instrumentation hook.
 
+### D. Browser / web frontend (SPA, React/Vue/Svelte client, any in-browser UI)  →  `@heystack/otel/web`
+Signals: a client-rendered web app — a Vite/CRA SPA, or the **client** of a Next/Remix/etc. app — where you want **session replay** plus client→backend trace correlation. This is **in addition to** any server-side entry above (A/B/C trace the backend; `/web` records the browser). Call `instrumentWeb` once, early in the client entry (e.g. `main.tsx`):
+```ts
+import { instrumentWeb } from "@heystack/otel/web";
+
+await instrumentWeb({
+  apiKey: import.meta.env.VITE_HEYSTACK_API_KEY, // same ingest key; exposed to the client build
+  service: "my-web-app",
+});
+```
+`instrumentWeb` records session replay and injects a W3C `traceparent` on outgoing `fetch` calls so replays correlate with backend traces. It returns a `stop()` function and is a **no-op on the server** (SSR-safe). **Sampling and masking are controlled from the console** — tell the user to enable replay under **Settings → Session replay** for the app (nothing records until it's enabled there). Masking is strict by default (all text inputs/passwords masked); fine-tune in the DOM with `data-hs-mask` (mask an element), `data-hs-block` (block a region), `data-hs-unmask` (reveal a trusted element). The optional `sampleRate` is only a local override.
+
+> Note: the browser bundle includes the ingest key, so a `/web` key is necessarily public — that's expected for client telemetry. Sampling/masking are enforced server-side from the console config.
+
 ## Step 3 — Set the environment variable
 
 - Local: `.env` / `.env.local` with `HEYSTACK_API_KEY=sk_live_…` (ensure `.env*` is gitignored).
@@ -119,4 +133,5 @@ Run the app and make one request. Within a few seconds, traces appear in the Hey
 | Next.js — any target (Vercel/Node **or** Cloudflare/OpenNext) | `@heystack/otel/next` (`registerHeystack`, auto-detects workerd) | `.env.local` / platform env / `wrangler secret` |
 | Standalone Cloudflare Worker (`export default { fetch }`, not Next) | `@heystack/otel/workers` (`instrument`, outermost wrapper) | `wrangler secret` |
 | Long-running Node server | `@heystack/otel/node` (`initHeystack`) | `.env` / platform env |
+| Browser / web frontend (session replay) | `@heystack/otel/web` (`instrumentWeb`, in the client entry) | public client env var; enable replay in **Settings → Session replay** |
 | Just need the export URL/headers | `@heystack/otel` (`buildExporterConfig`) | n/a (pure) |

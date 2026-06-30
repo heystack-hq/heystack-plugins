@@ -3,24 +3,28 @@ name: heystack-setup
 description: Use when adding Heystack observability/tracing to a project, or when the user mentions @heystack/otel, "set up Heystack", "add observability/tracing", or an ingest key like sk_live_…. Detects the framework (Next.js, Cloudflare Workers/OpenNext, Node/Express/Fastify, edge) and package manager, installs @heystack/otel, and wires the correct runtime pattern with the ingest key as an environment variable. Critical: the wrong runtime pattern is a production no-op (the Node SDK cannot run on Workers/Edge), so detection matters.
 ---
 
-<!-- MAINTAINER: the public skill mirror (apps/landing/public/heystack-setup.md)
-     must be re-synced after the 0.3.0 + 0.3.1 + 0.3.2 wording was added here.
-     0.3.0: Next-on-OpenNext now auto-flushes via the Cloudflare request context;
-     workerd detection uses the WebSocketPair global; instrument() sets the
-     global provider. 0.3.1: instrument() forwards queue/scheduled/tail (and
-     traces queue/scheduled); the exporter suppresses self-tracing on its
-     ingest POST. 0.3.2: registers an OTel ContextManager so that suppression
-     ACTUALLY takes effect (it was a no-op in 0.3.1) — Workers now REQUIRE the
-     nodejs_compat flag; hostname-accurate self-span filter; OpenNext accessor
-     race fixed; Node initHeystack idempotent + optional `instrumentations`;
-     drain timeout; Durable Objects need manual instrumentation (instrument()
-     only wraps the default-export handler, not named DO class exports). -->
+<!-- MAINTAINER: this file is mirrored to heystack-hq/heystack-plugins (the
+     published plugin repo). Re-sync that repo after changes here.
+     0.7.0: sampling: { remote: true } on /workers — fetch head-sampling rate
+     from Heystack config at runtime (change from dashboard, no redeploy; fails
+     open on cold start / unreachable config).
+     0.6.0: sampling: { rate } head sampling on /workers (drop fresh root traces
+     before export; parent-respecting; deterministic by trace-id).
+     0.5.0: getUser (identity enrichment), instrumentBindings (D1/KV/R2/Vectorize
+     child spans), automatic outbound-fetch CLIENT spans + traceparent injection,
+     withSpan/addEvent manual span helpers.
+     0.4.3: feedback-loop guard extended to Node path.
+     0.3.2: registers an OTel ContextManager so suppression ACTUALLY takes effect;
+     Workers now REQUIRE nodejs_compat; hostname-accurate self-span filter;
+     OpenNext accessor race fixed; Node initHeystack idempotent + optional
+     instrumentations; drain timeout; Durable Objects need manual instrumentation
+     (instrument() only wraps the default-export handler). -->
 
 # Setting up Heystack (@heystack/otel)
 
 Heystack is observability + security for AI apps. `@heystack/otel` ships traces to the Heystack ingest endpoint (`https://ingest.heystack.dev`) over OTLP/JSON. The package is **runtime-aware** with separate entry points — **using the wrong one breaks the app or silently sends nothing**, so detect the runtime first.
 
-> **Requires `@heystack/otel` `>=0.3.0` (prefer `>=0.3.2`).** Pin it. 0.3.0 makes Next-on-OpenNext auto-flush via the Cloudflare request context (no manual hook needed), hardens workerd detection so it survives `nodejs_compat`, and has `instrument()` register the global provider so nested spans export. 0.3.1 makes `instrument()` forward `queue`/`scheduled`/`tail` (and trace queue/scheduled) so Queue/Cron Workers still deploy. **0.3.2 is the important correctness release:** it registers an OpenTelemetry **ContextManager** so the exporter's self-trace **suppression actually takes effect** — in 0.3.1 it was a silent no-op, so the ingest POST could feed a feedback loop. Because that manager uses `node:async_hooks`, **Cloudflare Workers now require the `nodejs_compat` compatibility flag** (a sync fallback keeps suppression working otherwise). 0.3.2 also makes the self-span filter hostname-accurate, fixes an OpenNext flush race, makes the Node `initHeystack` idempotent + accept a custom `instrumentations` array, and adds a flush drain timeout. (0.2.0 made the Next.js entry auto-detect Cloudflare workerd and removed the old top-level default `initHeystack({ apiKey })` — use the subpath entries `/node`, `/next`, `/workers`.)
+> **Requires `@heystack/otel` `>=0.7.0` (prefer latest).** Pin it. **0.7.0** adds `sampling: { remote: true }` to `/workers` — fetch the head-sampling rate from the Heystack dashboard at runtime so you can tune it without redeploying; fails open on cold start or if the config can't be reached. **0.6.0** adds `sampling: { rate }` head sampling to `/workers` — drop a deterministic fraction of fresh root traces before export to control egress and ingest cost; parent-respecting (inbound sampled contexts are always recorded). **0.5.0** adds identity enrichment (`getUser`), D1/KV/R2/Vectorize child spans (`instrumentBindings`), automatic outbound-`fetch` CLIENT spans with `traceparent` injection (distributed tracing), and `withSpan`/`addEvent` manual span helpers to `/workers`. 0.4.3 extended the self-trace feedback-loop guard to the Node path. **0.3.2** registered an OpenTelemetry ContextManager so the exporter's self-trace suppression actually takes effect (it was a silent no-op in 0.3.1) — Workers now require the `nodejs_compat` compatibility flag; the self-span filter is hostname-accurate; Node `initHeystack` is idempotent + accepts a custom `instrumentations` array; drain timeout added. 0.3.1 made `instrument()` forward `queue`/`scheduled`/`tail` (and trace them) so Queue/Cron Workers still deploy. 0.3.0 made Next-on-OpenNext auto-flush via the Cloudflare request context. (0.2.0 made the Next.js entry auto-detect workerd and removed the old top-level default `initHeystack({ apiKey })` — use the subpath entries `/node`, `/next`, `/workers`.)
 
 ## Step 0 — Get the ingest key (never hardcode it)
 
@@ -30,14 +34,14 @@ The user creates an app in the Heystack console (https://console.heystack.dev) a
 
 Check the lockfile in the project root:
 
-Install with the `>=0.3.2` pin (the no-op-suppression fix + nodejs_compat requirement landed in 0.3.2):
+Install with the `>=0.7.0` pin (0.7.0 adds remote sampling; 0.6.0 adds head sampling; 0.5.0 adds identity enrichment, binding tracing, outbound-fetch tracing, and manual span helpers):
 
 | Lockfile | Manager | Install command |
 |---|---|---|
-| `pnpm-lock.yaml` | pnpm | `pnpm add "@heystack/otel@>=0.3.2"` |
-| `yarn.lock` | yarn | `yarn add "@heystack/otel@>=0.3.2"` |
-| `bun.lockb` | bun | `bun add "@heystack/otel@>=0.3.2"` |
-| `package-lock.json` (or none) | npm | `npm install "@heystack/otel@>=0.3.2"` |
+| `pnpm-lock.yaml` | pnpm | `pnpm add "@heystack/otel@>=0.7.0"` |
+| `yarn.lock` | yarn | `yarn add "@heystack/otel@>=0.7.0"` |
+| `bun.lockb` | bun | `bun add "@heystack/otel@>=0.7.0"` |
+| `package-lock.json` (or none) | npm | `npm install "@heystack/otel@>=0.7.0"` |
 
 ## Step 2 — Detect the runtime, then apply the matching pattern
 
@@ -60,29 +64,62 @@ Signals: a `wrangler.toml`/`wrangler.jsonc` with a hand-written Worker entry, `@
 ```ts
 import { instrument } from "@heystack/otel/workers";
 
-export default instrument(
-  {
-    async fetch(req, env, ctx) {
-      // ...your worker...
-      return new Response("ok");
-    },
-  },
-  { service: "my-worker" }, // apiKey defaults to env.HEYSTACK_API_KEY
-);
+export default instrument(worker, {
+  service: "my-worker",           // REQUIRED. apiKey defaults to env.HEYSTACK_API_KEY
+  getUser: (req) => ({            // optional: attach user/session identity per request
+    id: req.headers.get("x-user-id") ?? undefined,
+    session: req.headers.get("x-session-id") ?? undefined,
+  }),
+  instrumentBindings: true,       // optional: auto child spans for D1/KV/R2/Vectorize
+  sampling: { remote: true },     // optional: control the capture rate from the Heystack
+                                  // dashboard without redeploying (fails open on cold start)
+  // sampling: { rate: 0.2 },     // alternative: fixed rate — keep ~20% of fresh root traces
+});
 ```
-**`instrument()` must be the OUTERMOST wrapper** if other middleware also wraps the handler, so the request span covers everything inside it:
+
+**`instrument()` config options:**
+
+| Option | Type | Notes |
+|---|---|---|
+| `service` | `string` | **Required.** The name that appears in the Heystack console for this Worker. |
+| `apiKey` | `string?` | Defaults to `env.HEYSTACK_API_KEY` — set via `wrangler secret put HEYSTACK_API_KEY`. |
+| `getUser` | `(req: Request) => { id?, session?, requestId? }` | Called per request. Attaches `enduser.id`, `session.id`, or a request identifier to every captured request. |
+| `instrumentBindings` | `boolean \| string[]` | `true` = auto child spans for all detected D1/KV/R2/Vectorize bindings. `string[]` = only the named bindings. Default `false`. |
+| `sampling` | `{ rate?: number } \| { remote: true }` | `{ rate }`: head-sampling rate 0–1 (default `1` = keep all). `{ remote: true }`: fetch the rate from the Heystack dashboard — change it without redeploying. Cold start and unreachable config both fail open (keep everything). |
+
+**`instrument()` must be the OUTERMOST wrapper** if other middleware also wraps the handler:
 ```ts
 export default instrument(withOtherMiddleware(worker), { service: "my-worker" });
 ```
-Set the key as a Worker secret, not a file: `wrangler secret put HEYSTACK_API_KEY`. The wrapper auto-creates a server span per request and flushes via `ctx.waitUntil`, waiting for the export `fetch()` to actually complete before the isolate is torn down (earlier versions could drop the trace on fast handlers). As of `@heystack/otel >=0.3.0` it also registers the **global** tracer provider, so nested spans created via the global `trace.getTracer()` API export too — you get a trace tree, not just the top SERVER span. As of `@heystack/otel >=0.3.1`, `instrument()` **forwards `queue`/`scheduled`/`tail` (and any other exported handler)** untouched — so wrapping a Queue/Cron Worker no longer drops the handler Cloudflare requires for deploy — and traces `queue`/`scheduled` too. As of `0.3.2` the exporter's self-tracing suppression is genuinely effective (it registers an OTel ContextManager — in 0.3.1 it was a no-op), so there's no feedback loop with the host's outbound-`fetch` auto-instrumentation (e.g. Next/OpenNext); 0.3.2's ContextManager also gives cross-`await` parent→child span linking and per-request context isolation.
+Set the key as a Worker secret: `wrangler secret put HEYSTACK_API_KEY`.
 
-> **REQUIRED for Workers/OpenNext on `@heystack/otel >=0.3.2`: enable `nodejs_compat`.** The ContextManager uses `node:async_hooks`, available on workerd only under the Node compat flag. Add it to `wrangler.toml`:
+**What's traced automatically:**
+- **`fetch`** — a SERVER span per request. Inbound `traceparent` is continued; a `traceparent` response header is set so browser/mobile clients can read it.
+- **Outbound `fetch`** — each subrequest made while a request is active gets a CLIENT child span, and `traceparent` is injected so a downstream Heystack-instrumented service continues the same trace.
+- **`queue`** — a CONSUMER span per batch (queue name + message count).
+- **`scheduled`** — an INTERNAL span per invocation (cron expression).
+- **Binding calls** (when `instrumentBindings` is set) — child spans for D1 queries, KV reads/writes, R2 operations, and Vectorize queries.
+- **Client enrichment** — `enduser.id`/`session.id` from `getUser`, `client.address` from `CF-Connecting-IP`, and `geo.*` from `req.cf`.
+
+**Manual spans inside a handler (`withSpan` / `addEvent`):**
+```ts
+import { instrument, withSpan, addEvent } from "@heystack/otel/workers";
+
+// inside your fetch handler:
+const result = await withSpan("parse-payload", { source: "body" }, async () => {
+  addEvent("parsing-started");
+  return JSON.parse(await req.text());
+});
+```
+`withSpan(name, attrs?, fn)` creates a child span, records exceptions, and ends in `finally`. `addEvent(name, attrs?)` adds an event to the active span (no-op when none is active).
+
+> **REQUIRED for Workers on `@heystack/otel >=0.3.2`: enable `nodejs_compat`.** The context manager uses `AsyncLocalStorage` for per-request isolation. Add to `wrangler.toml`:
 > ```toml
 > compatibility_flags = ["nodejs_compat"]
 > ```
 > Without it the SDK falls back to a synchronous context manager — suppression still works, but cross-`await` span parenting and per-request isolation degrade to best-effort.
 
-> **Durable Objects are NOT auto-instrumented.** `instrument()` only wraps the keys of the default-export handler object (`fetch`/`queue`/`scheduled`/…). Durable Objects are **separate named class exports**, so their methods run untraced. Instrument a DO manually with the global tracer (`trace.getTracer("heystack")`) inside `context.with(trace.setSpan(...))`, `span.end()` in a `finally`, and flush the export with `this.state.waitUntil(flushHeystack())`. Still wrap the default export (or call `initHeystackWorkers`) so the global provider + ContextManager are registered before the DO runs.
+> **Durable Objects are NOT auto-instrumented.** `instrument()` only wraps the keys of the default-export handler object (`fetch`/`queue`/`scheduled`/…). Durable Objects are **separate named class exports**, so their methods run untraced. Instrument a DO manually with the global tracer (`trace.getTracer("heystack")`) inside `context.with(trace.setSpan(...))`, `span.end()` in a `finally`, and flush with `this.state.waitUntil(flushHeystack())`. Wrap the default export (or call `initHeystackWorkers`) so the global provider is registered before the DO runs.
 
 ### C. Plain Node / Express / Fastify / NestJS (long-running Node server)  →  `@heystack/otel/node`
 Signals: `express`/`fastify`/`@nestjs/*`, or a plain Node entry with no edge runtime. Initialise as the VERY FIRST import in the entry file (before the framework), so auto-instrumentation can patch modules:
@@ -121,7 +158,7 @@ Run the app and make one request. Within a few seconds, traces appear in the Hey
 - Confirm `HEYSTACK_API_KEY` is actually set in the running environment.
 - For `@heystack/otel/node`, pass `debug: true` to see OTel export logs.
 - Confirm the `service` here matches the app's service name in the console.
-- Confirm `@heystack/otel` is `>=0.3.2` (older versions silently send nothing on OpenNext/workerd, drop traces on the OpenNext path with no manual flush hook, or — pre-0.3.2 — can loop the ingest POST because self-trace suppression was a no-op).
+- Confirm `@heystack/otel` is `>=0.7.0` (0.7.0 adds remote sampling; 0.6.0 adds head sampling; 0.5.0 adds identity enrichment, binding tracing, outbound-fetch spans, and manual span helpers; older versions silently send nothing on OpenNext/workerd or — pre-0.3.2 — can loop the ingest POST).
 - On Cloudflare Workers/OpenNext, confirm `nodejs_compat` is in `compatibility_flags` (required by `>=0.3.2` for the context manager / suppression).
 - Heavy Node startup or overhead? Pass a slimmer `instrumentations: [...]` array to `initHeystack` instead of the default `getNodeAutoInstrumentations()` (which patches ~40 libs).
 - For a Next app on OpenNext/Cloudflare, the `/next` entry handles workerd automatically — no separate Workers wiring needed. If spans still don't show, call `flushHeystack()` from a response hook for guaranteed delivery.

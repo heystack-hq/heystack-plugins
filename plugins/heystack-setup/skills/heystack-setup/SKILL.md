@@ -5,6 +5,10 @@ description: Use when adding Heystack observability/tracing to a project, or whe
 
 <!-- MAINTAINER: this file is mirrored to heystack-hq/heystack-plugins (the
      published plugin repo). Re-sync that repo after changes here.
+     0.10.0: release/commit attribution — optional version (→ service.version) +
+     build (→ service.build, commit SHA) options on every runtime entry; powers
+     release health + suspect release/commit in the console. Node also reads
+     HEYSTACK_SERVICE_VERSION / OTEL_SERVICE_VERSION / HEYSTACK_SERVICE_BUILD env.
      0.9.0: automatic LLM gen_ai enrichment for outbound calls on /workers —
      detects OpenAI/Anthropic/CF AI Gateway/Google; attaches model, tokens,
      finish_reason; opt-in captureContent + redact for prompts/completions.
@@ -179,7 +183,7 @@ This bundles auto-instrumentations (HTTP, common libs) and registers a SIGTERM/S
 > Tip for entry-ordering in Node: if your build can't guarantee this is first, use `node --import` with a small `heystack.mjs` that calls `initHeystack`, or your framework's instrumentation hook.
 
 ### D. Browser / web frontend (SPA, React/Vue/Svelte client, any in-browser UI)  →  `@heystack/otel/web`
-Signals: a client-rendered web app — a Vite/CRA SPA, or the **client** of a Next/Remix/etc. app — where you want **session replay** plus client→backend trace correlation. This is **in addition to** any server-side entry above (A/B/C trace the backend; `/web` records the browser). Call `instrumentWeb` once, early in the client entry (e.g. `main.tsx`):
+Signals: a client-rendered web app — a Vite/CRA SPA, or the **client** of a Next/Remix/etc. app — where you want **session replay**, **browser error collection**, plus client→backend trace correlation. This is **in addition to** any server-side entry above (A/B/C trace the backend; `/web` records the browser). Call `instrumentWeb` once, early in the client entry (e.g. `main.tsx`):
 ```ts
 import { instrumentWeb } from "@heystack/otel/web";
 
@@ -188,9 +192,57 @@ await instrumentWeb({
   service: "my-web-app",
 });
 ```
-`instrumentWeb` records session replay and injects a W3C `traceparent` on outgoing `fetch` calls so replays correlate with backend traces. It returns a `stop()` function and is a **no-op on the server** (SSR-safe). **Sampling and masking are controlled from the console** — tell the user to enable replay under **Settings → Session replay** for the app (nothing records until it's enabled there). Masking is strict by default (all text inputs/passwords masked); fine-tune in the DOM with `data-hs-mask` (mask an element), `data-hs-block` (block a region), `data-hs-unmask` (reveal a trusted element). The optional `sampleRate` is only a local override.
+`instrumentWeb` records session replay and injects a W3C `traceparent` on outgoing `fetch` calls so replays correlate with backend traces. It returns a `stop()` function and is a **no-op on the server** (SSR-safe). The rrweb recorder **ships inside `@heystack/otel`** (nothing else to install) and uploads **cross-origin with no CORS setup**. **Sampling and masking are controlled from the console** — tell the user to enable replay under **Settings → Session replay** for the app (nothing records until it's enabled there). Masking is strict by default (all text inputs/passwords masked); fine-tune in the DOM with `data-hs-mask` (mask an element), `data-hs-block` (block a region), `data-hs-unmask` (reveal a trusted element). The optional `sampleRate` is only a local override.
 
-> Note: the browser bundle includes the ingest key, so a `/web` key is necessarily public — that's expected for client telemetry. Sampling/masking are enforced server-side from the console config.
+**Browser error collection (on by default):** `instrumentWeb` also captures uncaught errors (`window.onerror` + `unhandledrejection`) and `console.error` as logs — they appear in the app's **Logs** tab, stamped with the page URL and `session_id` (so each error links to its session replay and, if tracing is on, its trace). Options: `errors: false` to disable, `captureConsole: 'warn' | 'error' | false` (default `'error'`; `'warn'` also captures `console.warn`). Also pass `version` / `build` (release + commit) so a browser regression is attributed to the release that introduced it. Console capture is rate-capped and never traces its own upload (no self-export loop).
+
+**In-app bug reports (`reportBug`):** the `/web` entry also exports `reportBug({ message, email?, context? })` — a headless API (no widget; the app builds the button) that lets a user file a bug from inside the app. It auto-attaches the URL, replay `session_id`, active `trace_id`, `version` / `build`, and the last few captured browser errors, and the report shows up in the console **Bugs** tab already linked to the session replay and trace. Call it any time after `instrumentWeb()` (it throws before init or on an empty message; network failures are swallowed). Wire it to whatever UI you like:
+
+```ts
+import { reportBug } from "@heystack/otel/web";
+await reportBug({ message: userText, email: currentUser?.email, context: { screen: "checkout" } });
+```
+
+**Browser distributed tracing (optional):** pass `tracing: true` (and a `traceSampleRate`, 0–1) to also emit a real CLIENT span per outbound `fetch` and propagate W3C context — so a browser→API call shows as ONE connected trace and a `web → api` service-map edge (view the map as **All apps** for the org-wide topology). Off by default (adds backend span volume), head-sampled, and never traces its own upload (no self-export loop). Independent of replay.
+
+**Framework placement — it MUST run in the browser:**
+- **Vite / CRA** — call it in the client entry (`main.tsx`), as above.
+- **Next.js (App Router)** — a server component can't call it. Put it in a `"use client"` component that runs `instrumentWeb()` from a `useEffect`, then mount that once in `app/layout.tsx`, keyed on `process.env.NEXT_PUBLIC_HEYSTACK_API_KEY`:
+```tsx
+"use client";
+import { useEffect } from "react";
+import { instrumentWeb } from "@heystack/otel/web";
+export function HeystackReplay() {
+  useEffect(() => {
+    const apiKey = process.env.NEXT_PUBLIC_HEYSTACK_API_KEY;
+    if (!apiKey) return;
+    let stop: (() => void) | undefined, cancelled = false;
+    instrumentWeb({ apiKey, service: "my-web-app" }).then((s) => (cancelled ? s() : (stop = s))).catch(() => {});
+    return () => { cancelled = true; stop?.(); };
+  }, []);
+  return null;
+}
+```
+
+> Note: the browser bundle includes the ingest key, so a `/web` key is necessarily public — that's expected for client telemetry (use a dedicated, rotatable key). Sampling/masking are enforced server-side from the console config.
+
+### Attribute telemetry to a release/commit (recommended, all runtimes)
+
+Set two optional options so the console can show **release health** and pinpoint the **suspect release / suspect commit** behind a regression — they work on `/node`, `/next`, and `/workers`:
+
+```ts
+initHeystack({
+  apiKey: process.env.HEYSTACK_API_KEY,
+  service: "my-app",
+  version: process.env.APP_VERSION, // → service.version (a release id: "1.4.2", a git tag, …)
+  build: process.env.GIT_SHA,       // → service.build   (the commit SHA of this deploy)
+});
+```
+
+- `version` → the `service.version` resource attribute — groups telemetry by release.
+- `build` → the `service.build` resource attribute — the commit SHA; deep-links to the commit when a repo URL is set for the app in the console.
+
+Wire them from the build/deploy environment (e.g. `build: process.env.GIT_SHA`, with `GIT_SHA=$(git rev-parse HEAD)` in CI). For **Next.js** pass them to `registerHeystack({ service, version, build })`; for **Workers** pass them in the `instrument()` config. On **Node** you can instead set env vars: `HEYSTACK_SERVICE_VERSION` (or `OTEL_SERVICE_VERSION`) and `HEYSTACK_SERVICE_BUILD`. Both options are optional — omit them if the app has no release/commit concept.
 
 ## Step 3 — Set the environment variable
 

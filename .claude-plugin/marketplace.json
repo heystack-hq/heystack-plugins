@@ -6,12 +6,12 @@
     {
       "name": "heystack-setup",
       "source": "./plugins/heystack-setup",
-      "description": "Set up Heystack observability in any project — runtime-aware (Cloudflare Workers, Next.js, Node).",
-      "version": "0.1.0",
+      "description": "Set up Heystack observability in any project — native Cloudflare Workers and Agents, Next.js, Node, and browser telemetry.",
+      "version": "0.2.0",
       "author": { "name": "Heystack" },
       "license": "MIT",
       "homepage": "https://heystack.dev",
-      "keywords": ["heystack", "observability", "opentelemetry", "tracing", "cloudflare-workers", "nextjs"]
+      "keywords": ["heystack", "observability", "opentelemetry", "tracing", "cloudflare-workers", "cloudflare-agents", "nextjs"]
     }
   ]
 }

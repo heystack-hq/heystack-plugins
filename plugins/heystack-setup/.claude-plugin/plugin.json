@@ -1,9 +1,9 @@
 {
   "name": "heystack-setup",
-  "description": "Set up Heystack observability — including native Cloudflare Workers, Agents, Next.js, Node, and browser telemetry.",
-  "version": "0.2.0",
+  "description": "Set up Heystack observability — Android OTLP logs, native Cloudflare Workers, Agents, Next.js, Node, and browser telemetry.",
+  "version": "0.3.0",
   "author": { "name": "Heystack" },
   "license": "MIT",
   "homepage": "https://heystack.dev",
-  "keywords": ["heystack", "observability", "opentelemetry", "cloudflare-workers", "cloudflare-agents"]
+  "keywords": ["heystack", "observability", "opentelemetry", "android", "cloudflare-workers", "cloudflare-agents"]
 }

@@ -1,6 +1,13 @@
 ---
 name: heystack-setup
-description: Use when adding Heystack observability/tracing to a project, or when the user mentions @heystack/otel, "set up Heystack", "add observability/tracing", or an ingest key like sk_live_…. Detects the framework (Next.js, Cloudflare Workers/OpenNext, Node/Express/Fastify, edge) and package manager, installs @heystack/otel, and wires the correct runtime pattern with the ingest key as an environment variable. Critical: the wrong runtime pattern is a production no-op (the Node SDK cannot run on Workers/Edge), so detection matters.
+description: >-
+  Use when adding Heystack observability to a project, or when the user mentions
+  @heystack/otel, "set up Heystack", "add observability/tracing", Android OTLP
+  logs, or an ingest key like sk_live_… or hs_android_…. Detects Android,
+  Next.js, Cloudflare Workers/OpenNext, Node/Express/Fastify, edge, and browser
+  runtimes; then wires the matching SDK or direct OTLP/HTTP pattern and
+  credential class. Android does not use the JavaScript SDK, and the wrong
+  JavaScript runtime entry is a production no-op.
 ---
 
 <!-- MAINTAINER: this file is mirrored to heystack-hq/heystack-plugins (the
@@ -32,17 +39,25 @@ description: Use when adding Heystack observability/tracing to a project, or whe
 
 # Setting up Heystack (@heystack/otel)
 
-Heystack is observability + security for AI apps. `@heystack/otel` ships traces to the Heystack ingest endpoint (`https://ingest.heystack.dev`) over OTLP/JSON. The package is **runtime-aware** with separate entry points — **using the wrong one breaks the app or silently sends nothing**, so detect the runtime first.
+Heystack is observability + security for AI apps. JavaScript runtimes use the runtime-aware `@heystack/otel` package. Android apps send standard OTLP/HTTP JSON directly to `https://ingest.heystack.dev/v1/logs`; there is no Heystack Android package to install. **Using the wrong JavaScript entry breaks the app or silently sends nothing**, so detect the runtime first.
 
 > **Requires `@heystack/otel` `>=0.13.0` (prefer latest).** Pin it. 0.13 makes Cloudflare's native invocation/platform trace authoritative, adds native business spans, queue/cron coverage, and the Agents/Tail Worker adapters. Direct Workers OTLP remains an explicit compatibility fallback.
 
 ## Step 0 — Get the ingest key (never hardcode it)
 
-The user creates an app in the Heystack console (https://console.heystack.dev) and gets an `sk_live_…` key, shown once. Node/Next/direct-Workers SDKs read it from `HEYSTACK_API_KEY`; Cloudflare native mode stores it only as a destination header in the Cloudflare dashboard. **Never paste it into committed source.**
+The user creates an app in the Heystack console (https://console.heystack.dev). Choose the credential for the runtime:
 
-## Step 1 — Detect the package manager
+- Node, Next.js, direct Workers, and server-side SDKs use a **server key** (`sk_live_…`). Read it from `HEYSTACK_API_KEY`; never embed it in client code.
+- Android uses a **Mobile (Android) key** (`hs_android_…`). Mint it from the app's **Settings** tab. It is public and ingest-only, so it is safe in a distributed app but cannot perform privileged operations. Keep the raw value out of source history and inject it from the release CI secret store.
+- Cloudflare native mode stores its bearer token only in the destination header in the Cloudflare dashboard.
 
-Check the lockfile in the project root:
+Every raw key is shown once. **Never paste one into committed source.**
+
+## Step 1 — Detect Android before installing anything
+
+Look for `settings.gradle`, `settings.gradle.kts`, `build.gradle`, or `build.gradle.kts` with the Android application/library plugin. If this is an Android app, **do not install `@heystack/otel`**. Skip the JavaScript package-manager step and apply runtime pattern E below.
+
+For JavaScript runtimes, check the lockfile in the project root:
 
 Install with the `>=0.13.0` pin:
 
@@ -55,7 +70,7 @@ Install with the `>=0.13.0` pin:
 
 ## Step 2 — Detect the runtime, then apply the matching pattern
 
-Inspect `package.json` dependencies + config files. **Match in this order** (Next first — it covers its own Cloudflare/OpenNext case now):
+Inspect the project and its config files. **Match in this order**: Android first; then Next (which covers its own Cloudflare/OpenNext case); then standalone Workers, Node, and browser.
 
 ### A. Next.js (any deploy target, incl. Cloudflare/OpenNext)  →  `@heystack/otel/next`
 Signals: `next` in dependencies. This is the entry for Next regardless of where it deploys — Vercel/Node **or** Cloudflare via OpenNext. You do NOT need to know the deploy target: `registerHeystack` auto-detects Node vs Cloudflare workerd at runtime and picks the right exporter (Node SDK on Node, fetch-based exporter on workerd — where the Node SDK's `node:http` exporter would silently send nothing). It's also a no-op on the Edge runtime, so it's safe to call unconditionally.
@@ -218,7 +233,43 @@ export function HeystackReplay() {
 
 > Note: the browser bundle includes the ingest key, so a `/web` key is necessarily public — that's expected for client telemetry (use a dedicated, rotatable key). Sampling/masking are enforced server-side from the console config.
 
-### Attribute telemetry to a release/commit (recommended, all runtimes)
+### E. Android app → direct OTLP/HTTP logs (no `@heystack/otel` package)
+
+Signals: an Android Gradle plugin plus `AndroidManifest.xml`, Kotlin/Java Android sources, or an Android application module. Heystack currently accepts Android telemetry as standard OTLP/HTTP logs. Do not add the JavaScript SDK or use a server key.
+
+1. Mint a **Mobile (Android) key** (`hs_android_…`) in the app's Heystack **Settings** tab.
+2. Keep the raw value in the release CI secret store. Inject it into a `BuildConfig` field through a Gradle property; keep the default empty so local/debug builds can remain inert:
+
+```kotlin
+// app/build.gradle.kts
+val heystackIngestKey = (project.findProperty("heystackIngestKey") as String?) ?: ""
+android.defaultConfig {
+    buildConfigField("String", "HEYSTACK_INGEST_KEY", "\"$heystackIngestKey\"")
+}
+```
+
+Build release artifacts with the secret supplied by CI, for example:
+
+```bash
+./gradlew assembleRelease -PheystackIngestKey="$HEYSTACK_INGEST_KEY_ANDROID"
+```
+
+The key is recoverable from the distributed app; CI injection keeps it out of source history but does not make it secret. The `hs_android_…` class is intentionally ingest-only and rotatable.
+
+3. POST standard OTLP Logs JSON to `https://ingest.heystack.dev/v1/logs` with:
+
+```text
+Authorization: Bearer hs_android_…
+Content-Type: application/json
+```
+
+Use the project's existing HTTP client and JSON serializer. Each request must contain `resourceLogs`; include `service.name` and, when available, `service.version` and `deployment.environment` as resource attributes. Model each product event as a log record with `event.name`. OTLP `timeUnixNano` and integer values are JSON strings. Send off the UI thread, bound to an application-owned lifecycle scope, and swallow/report transport failures without breaking the user flow.
+
+4. Preserve the app's consent boundary. Do not capture email, names, message text, auth tokens, podcast/search content, or other user content. Use an opaque user ID only when the product's approved analytics policy allows it.
+
+Do not use the Android key for dSYM upload or other privileged APIs; those require `sk_live_…`. Heystack does not currently provide Android crash-symbol upload through this path.
+
+### Attribute telemetry to a release/commit (recommended, JavaScript runtimes)
 
 Set two optional options so the console can show **release health** and pinpoint the **suspect release / suspect commit** behind a regression — they work on `/node`, `/next`, and `/workers`:
 
@@ -241,6 +292,7 @@ Wire them from the build/deploy environment (e.g. `build: process.env.GIT_SHA`, 
 - Local: `.env` / `.env.local` with `HEYSTACK_API_KEY=sk_live_…` (ensure `.env*` is gitignored).
 - Cloudflare Workers native export: store the bearer token in each Cloudflare OTel destination; there is no Worker runtime secret. Direct compatibility mode only: `wrangler secret put HEYSTACK_API_KEY`.
 - Vercel/Netlify/etc.: add `HEYSTACK_API_KEY` in the platform's env settings (and to the right environments).
+- Android: store `HEYSTACK_INGEST_KEY_ANDROID=hs_android_…` in the release CI secret store and pass it to the Gradle property used by the app. Do not add it to `gradle.properties`, source, logs, or pull-request output.
 
 ## Step 4 — Verify
 
@@ -252,6 +304,7 @@ Run the app and make one request. Within a few seconds, traces appear in the Hey
 - On standalone Cloudflare Workers, confirm `ctx.tracing` is available and both native destinations report successful delivery. `nodejs_compat` is only required by direct compatibility mode, not the native path.
 - Heavy Node startup or overhead? Pass a slimmer `instrumentations: [...]` array to `initHeystack` instead of the default `getNodeAutoInstrumentations()` (which patches ~40 libs).
 - For a Next app on OpenNext/Cloudflare, the `/next` entry handles workerd automatically — no separate Workers wiring needed. If spans still don't show, call `flushHeystack()` from a response hook for guaranteed delivery.
+- On Android, make one consent-approved test event from a release-like build. Confirm the request returns success, then filter the app's **Logs** tab by `service.name` and `event.name`. A debug build with an intentionally empty key should stay inert.
 
 ## Runtime decision table (quick reference)
 
@@ -263,4 +316,5 @@ Run the app and make one request. Within a few seconds, traces appear in the Hey
 | Standalone Cloudflare Worker — runtime lacks `ctx.tracing` | `@heystack/otel/workers` with `nativeTracing: "direct"` (compatibility fallback) | `wrangler secret` |
 | Long-running Node server | `@heystack/otel/node` (`initHeystack`) | `.env` / platform env |
 | Browser / web frontend (session replay) | `@heystack/otel/web` (`instrumentWeb`, in the client entry) | public client env var; enable replay in **Settings → Session replay** |
+| Android app | Direct OTLP/HTTP JSON to `/v1/logs`; no Heystack package | `hs_android_…` injected from release CI into the app build |
 | Just need the export URL/headers | `@heystack/otel` (`buildExporterConfig`) | n/a (pure) |

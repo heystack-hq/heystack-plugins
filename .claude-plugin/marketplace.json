@@ -1,13 +1,23 @@
 {
   "name": "heystack",
   "owner": { "name": "Heystack", "url": "https://heystack.dev" },
-  "metadata": { "description": "Heystack agent skills for Claude Code" },
+  "metadata": { "description": "Heystack for coding agents — hosted MCP server + setup and investigation skills" },
   "plugins": [
+    {
+      "name": "heystack",
+      "source": "./plugins/heystack",
+      "description": "Heystack observability for your coding agent: the hosted MCP server (investigate incidents, traces, sessions, AI usage; manage apps, keys, alerts) plus the heystack-setup and heystack-investigate skills.",
+      "version": "1.0.0",
+      "author": { "name": "Heystack" },
+      "license": "MIT",
+      "homepage": "https://heystack.dev/docs/mcp",
+      "keywords": ["heystack", "observability", "mcp", "tracing", "opentelemetry", "incident", "investigation", "llm", "cloudflare-workers", "nextjs"]
+    },
     {
       "name": "heystack-setup",
       "source": "./plugins/heystack-setup",
-      "description": "Set up Heystack observability — Android OTLP logs, native Cloudflare Workers and Agents, Next.js, Node, and browser telemetry.",
-      "version": "0.4.0",
+      "description": "Set up Heystack observability — Android OTLP logs, native Cloudflare Workers and Agents, Next.js, Node, and browser telemetry. Skill only; install `heystack` for the MCP server too.",
+      "version": "0.5.0",
       "author": { "name": "Heystack" },
       "license": "MIT",
       "homepage": "https://heystack.dev",

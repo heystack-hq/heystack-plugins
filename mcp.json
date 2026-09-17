@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "heystack": {
+      "type": "streamable-http",
+      "url": "https://mcp.heystack.dev/mcp?toolsets=all"
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "heystack",
+  "version": "1.0.0",
+  "description": "Heystack observability for your coding agent: hosted MCP server (investigate incidents, traces, sessions, AI usage; manage apps, keys, alerts) plus the heystack-setup and heystack-investigate skills.",
+  "author": { "name": "Heystack", "url": "https://heystack.dev" },
+  "homepage": "https://heystack.dev/docs/mcp",
+  "repository": "https://github.com/heystack-hq/heystack-plugins",
+  "license": "MIT",
+  "keywords": ["heystack", "observability", "mcp", "tracing", "opentelemetry", "incident", "investigation", "llm"],
+  "skills": "./skills/",
+  "mcpServers": "./mcp.json"
+}

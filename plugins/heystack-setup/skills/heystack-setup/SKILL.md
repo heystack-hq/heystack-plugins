@@ -12,6 +12,13 @@ description: >-
 
 <!-- MAINTAINER: this file is mirrored to heystack-hq/heystack-plugins (the
      published plugin repo). Re-sync that repo after changes here.
+     0.14.0: gen_ai enrichment now works under Cloudflare NATIVE tracing (LLM-only
+     fetch hook; other subrequests untouched); new provider Mistral; `ai.gateways`
+     resolves the provider from an AI-gateway URL (Wafer: hostSuffix
+     "wafersecurity.ai" + pathPattern "/p/:tenant/:provider"); streaming (SSE)
+     responses yield token usage without reading content; genAiRequestAttrs /
+     genAiResponseAttrs exported for manual withSpan around env.AI.run. OTel 2.x
+     SDK deps (Node >= 18.19 on /node + /next).
      0.13.0: Cloudflare-native trace routing, async-safe custom spans, queue/cron,
      Agents observability + Tail Worker adapters; direct OTLP is fallback-only.
      0.10.0: release/commit attribution — optional version (→ service.version) +
@@ -41,7 +48,7 @@ description: >-
 
 Heystack is observability + security for AI apps. JavaScript runtimes use the runtime-aware `@heystack/otel` package. Android apps send standard OTLP/HTTP JSON directly to `https://ingest.heystack.dev/v1/logs`; there is no Heystack Android package to install. **Using the wrong JavaScript entry breaks the app or silently sends nothing**, so detect the runtime first.
 
-> **Requires `@heystack/otel` `>=0.13.0` (prefer latest).** Pin it. 0.13 makes Cloudflare's native invocation/platform trace authoritative, adds native business spans, queue/cron coverage, and the Agents/Tail Worker adapters. Direct Workers OTLP remains an explicit compatibility fallback.
+> **Requires `@heystack/otel` `>=0.14.0` (prefer latest).** Pin it. 0.14 makes LLM `gen_ai.*` telemetry work under Cloudflare native tracing (0.13 emitted none there), adds Mistral + AI-gateway detection (`ai.gateways`) and streaming token usage. 0.13 makes Cloudflare's native invocation/platform trace authoritative, adds native business spans, queue/cron coverage, and the Agents/Tail Worker adapters. Direct Workers OTLP remains an explicit compatibility fallback.
 
 ## Step 0 — Get the ingest key (never hardcode it)
 
@@ -59,14 +66,14 @@ Look for `settings.gradle`, `settings.gradle.kts`, `build.gradle`, or `build.gra
 
 For JavaScript runtimes, check the lockfile in the project root:
 
-Install with the `>=0.13.0` pin:
+Install with the `>=0.14.0` pin:
 
 | Lockfile | Manager | Install command |
 |---|---|---|
-| `pnpm-lock.yaml` | pnpm | `pnpm add "@heystack/otel@>=0.13.0"` |
-| `yarn.lock` | yarn | `yarn add "@heystack/otel@>=0.13.0"` |
-| `bun.lockb` | bun | `bun add "@heystack/otel@>=0.13.0"` |
-| `package-lock.json` (or none) | npm | `npm install "@heystack/otel@>=0.13.0"` |
+| `pnpm-lock.yaml` | pnpm | `pnpm add "@heystack/otel@>=0.14.0"` |
+| `yarn.lock` | yarn | `yarn add "@heystack/otel@>=0.14.0"` |
+| `bun.lockb` | bun | `bun add "@heystack/otel@>=0.14.0"` |
+| `package-lock.json` (or none) | npm | `npm install "@heystack/otel@>=0.14.0"` |
 
 ## Step 2 — Detect the runtime, then apply the matching pattern
 
@@ -117,7 +124,7 @@ Destination names must match the dashboard. `persist = false` exports without al
 #### 2. Install the native-first SDK for business context
 
 ```bash
-npm install "@heystack/otel@>=0.13.0"
+npm install "@heystack/otel@>=0.14.0"
 ```
 
 ```ts
@@ -147,12 +154,23 @@ In native mode:
 
 - do **not** add `HEYSTACK_API_KEY` to the Worker; the destination owns authentication;
 - do **not** enable `instrumentBindings`; Cloudflare automatically instruments supported `fetch`, KV, D1, and other platform operations;
-- no `nodejs_compat` flag is required by Heystack;
+- no `nodejs_compat` flag is required by Heystack (except for automatic LLM enrichment after an `await` — see below);
 - queue and scheduled handlers are wrapped in native spans;
 - use `withCloudflareSpan(ctx, ...)` for async-safe custom spans after arbitrary `await` boundaries;
 - use `withSpan(...)` only when an active native/OTel context is already available.
 
-Set `nativeTracing: "direct"` only on a runtime where `ctx.tracing`/native export is unavailable. Direct mode requires `wrangler secret put HEYSTACK_API_KEY`, `nodejs_compat`, and may use `instrumentBindings`, sampling, and AI enrichment. Never combine direct mode with a native trace destination; that duplicates spans.
+**AI apps (LLM calls).** Outbound calls to OpenAI / Anthropic / Mistral / Google / Cloudflare AI Gateway hosts are tagged with `gen_ai.*` automatically (native span `chat <provider>`; token usage is lifted from streaming responses too, never content). If the app calls providers **through an AI gateway** (e.g. Wafer: `https://wafersecurity.ai/p/<tenant>/<provider>/…`), add `ai.gateways` so the provider can be read from the URL — grep the code for the gateway host to find the pattern:
+
+```ts
+export default instrument(worker, {
+  service: "my-worker",
+  ai: { gateways: [{ hostSuffix: "wafersecurity.ai", pathPattern: "/p/:tenant/:provider" }] },
+});
+```
+
+For LLM calls that do not go through `fetch` (Workers AI `env.AI.run`, SDKs with a custom transport) wrap them manually: `withSpan("chat cloudflare", genAiRequestAttrs("cloudflare", { model }), async (span) => { const out = await env.AI.run(model, input); span.setAttributes(genAiResponseAttrs("cloudflare", out)); return out; })` (both helpers are exported from `@heystack/otel/workers`). The automatic hook needs the request context to survive `await`s, i.e. the `nodejs_compat` compatibility flag; without it use `withCloudflareSpan(ctx, …)` with the same helpers. Never set `ai.captureContent: true` without the user asking for prompt/completion capture.
+
+Set `nativeTracing: "direct"` only on a runtime where `ctx.tracing`/native export is unavailable. Direct mode requires `wrangler secret put HEYSTACK_API_KEY`, `nodejs_compat`, and may use `instrumentBindings` and sampling (AI enrichment works in both modes). Never combine direct mode with a native trace destination; that duplicates spans.
 
 #### 3. Cloudflare Agents SDK
 

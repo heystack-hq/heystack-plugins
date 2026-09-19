@@ -1,11 +1,22 @@
 {
   "name": "heystack",
   "description": "Heystack observability for your coding agent: hosted MCP server (investigate incidents, traces, sessions, AI usage; manage apps, keys, alerts) plus the heystack-setup and heystack-investigate skills.",
-  "version": "1.0.0",
-  "author": { "name": "Heystack" },
+  "version": "1.2.0",
+  "author": {
+    "name": "Heystack"
+  },
   "license": "MIT",
   "homepage": "https://heystack.dev/docs/mcp",
-  "keywords": ["heystack", "observability", "mcp", "tracing", "opentelemetry", "incident", "investigation", "llm"],
+  "keywords": [
+    "heystack",
+    "observability",
+    "mcp",
+    "tracing",
+    "opentelemetry",
+    "incident",
+    "investigation",
+    "llm"
+  ],
   "skills": "./skills/",
   "mcpServers": "./.mcp.json"
 }

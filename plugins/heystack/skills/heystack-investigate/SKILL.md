@@ -58,6 +58,7 @@ Call `heystack_investigate` with the app and the window (optionally a `trace_id`
 
 - `summary` — one paragraph. Repeat it to the user in your own words.
 - `hypotheses[]` — each has `status` ∈ `supported` | `ruled_out` | `unknown` and `evidence[]` (`tool`, `args`, `finding`, `console_url`). **Treat `supported` as "worth verifying", not proven**: open the evidence. `ruled_out` hypotheses are worth mentioning briefly so the user doesn't chase them. `unknown` means the data was inconclusive — you may need Step 4 to settle it.
+- `measurement_notes` explains limits: affected users/sessions are observed lower bounds; combined p95 fields are route-weighted indicators, not global percentiles; release association is not proof of causation. Missing evidence must remain unknown.
 - `suspect_release` — release/commit whose arrival lines up with the change. Cross-check with `heystack_list_releases`: did the error rate actually differ before/after?
 - `affected` — users and sessions counts. Use these for severity.
 - `red_delta` — requests, error rate and p95 now vs the previous window of the same length; `top_problems` and `example_trace` (already explained) back the hypotheses.
@@ -81,6 +82,12 @@ Pick the narrowest tool that answers the open question:
 - **Need SDK/console facts**: `heystack_docs` (query or slug) reads the public docs and the `heystack-setup` skill.
 
 Stop when you can name: **what** fails (route/operation/exception), **since when**, **how many** users/sessions, and **why** (the frame or dependency), with a `console_url` for each claim.
+
+## Care journeys and recovery evidence
+
+When the owner asks whether a customer outcome is working, start with `heystack_get_care` and follow an incident with `heystack_get_care_incident`. Use `heystack_run_care_checkup` only to run an owner-authorized configured check. Read `heystack_get_journey_evidence` before claiming a journey passed or failed; an unavailable checker is unknown, not a product failure.
+
+After a fix, use `heystack_configure_journey` to keep a durable regression check only when the owner asks. HTTP assertions and browser steps are mutually exclusive. Browser checks run repeatedly: use synthetic test data, never credentials or real payments, and explicitly list only the extra public origins the flow needs. A prepared repair is not recovery; report recovery only after its recorded verification evidence or receipt says the affected journey passed.
 
 ## Step 5 — Propose the fix in code
 

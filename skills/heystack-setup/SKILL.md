@@ -18,6 +18,7 @@ description: >-
      after editing; CI fails if the copies drift.
      MCP: if the Heystack MCP server is connected, Step 0 can be done by the
      agent (heystack_create_app) and Step 5 verifies with heystack_verify_setup.
+     0.15.0: direct Workers instrumentation now covers D1 sessions and batches alongside prepared statements, plus the existing KV, R2, Vectorize, AI, Queue and Service bindings. Native Cloudflare OTel remains the preferred path for Workers: it exports Cloudflare's platform trace/log tree; direct SDK mode is only for runtimes without native tracing.
      0.14.0: gen_ai enrichment now works under Cloudflare NATIVE tracing (LLM-only
      fetch hook; other subrequests untouched); new provider Mistral; `ai.gateways`
      resolves the provider from an AI-gateway URL (Wafer: hostSuffix
@@ -54,7 +55,7 @@ description: >-
 
 Heystack is observability + security for AI apps. JavaScript runtimes use the runtime-aware `@heystack/otel` package. Android apps send standard OTLP/HTTP JSON directly to `https://ingest.heystack.dev/v1/logs`; there is no Heystack Android package to install. **Using the wrong JavaScript entry breaks the app or silently sends nothing**, so detect the runtime first.
 
-> **Requires `@heystack/otel` `>=0.14.0` (prefer latest).** Pin it. 0.14 makes LLM `gen_ai.*` telemetry work under Cloudflare native tracing (0.13 emitted none there), adds Mistral + AI-gateway detection (`ai.gateways`) and streaming token usage. 0.13 makes Cloudflare's native invocation/platform trace authoritative, adds native business spans, queue/cron coverage, and the Agents/Tail Worker adapters. Direct Workers OTLP remains an explicit compatibility fallback.
+> **Requires `@heystack/otel` `>=0.15.0` (prefer latest).** 0.15 extends direct Workers coverage to D1 sessions and batches. For Workers, Cloudflare native OTel is still the preferred path: it exports the platform trace and log tree, while the SDK adds business context. Direct SDK export is only a compatibility fallback when native tracing is unavailable.
 
 ## Step 0 — Get the ingest key (never hardcode it)
 
@@ -74,14 +75,14 @@ Look for `settings.gradle`, `settings.gradle.kts`, `build.gradle`, or `build.gra
 
 For JavaScript runtimes, check the lockfile in the project root:
 
-Install with the `>=0.14.0` pin:
+Install with the `>=0.15.0` pin:
 
 | Lockfile | Manager | Install command |
 |---|---|---|
-| `pnpm-lock.yaml` | pnpm | `pnpm add "@heystack/otel@>=0.14.0"` |
-| `yarn.lock` | yarn | `yarn add "@heystack/otel@>=0.14.0"` |
-| `bun.lockb` | bun | `bun add "@heystack/otel@>=0.14.0"` |
-| `package-lock.json` (or none) | npm | `npm install "@heystack/otel@>=0.14.0"` |
+| `pnpm-lock.yaml` | pnpm | `pnpm add "@heystack/otel@>=0.15.0"` |
+| `yarn.lock` | yarn | `yarn add "@heystack/otel@>=0.15.0"` |
+| `bun.lockb` | bun | `bun add "@heystack/otel@>=0.15.0"` |
+| `package-lock.json` (or none) | npm | `npm install "@heystack/otel@>=0.15.0"` |
 
 ## Step 2 — Detect the runtime, then apply the matching pattern
 
@@ -132,7 +133,7 @@ Destination names must match the dashboard. `persist = false` exports without al
 #### 2. Install the native-first SDK for business context
 
 ```bash
-npm install "@heystack/otel@>=0.14.0"
+npm install "@heystack/otel@>=0.15.0"
 ```
 
 ```ts
@@ -259,7 +260,11 @@ export function HeystackReplay() {
 
 > Note: the browser bundle includes the ingest key, so a `/web` key is necessarily public — that's expected for client telemetry (use a dedicated, rotatable key). Sampling/masking are enforced server-side from the console config.
 
-### E. Android app → direct OTLP/HTTP logs (no `@heystack/otel` package)
+### E. Python, Rust, and WebAssembly → standard OTLP (no JavaScript SDK)
+
+For Python, Rust, WebAssembly, or another non-JavaScript runtime, use that ecosystem’s standard OpenTelemetry SDK and export OTLP/HTTP to Heystack. Do **not** install `@heystack/otel`; it is a JavaScript package. Send traces to `https://ingest.heystack.dev/v1/traces` and logs to `https://ingest.heystack.dev/v1/logs` with `Authorization: Bearer <server key>`. Keep the server key in the platform secret store, set `service.name`, and add `service.version` / `service.build` when the deploy has them. This is separate from Cloudflare native Workers export: native Workers destinations are configured in the Cloudflare dashboard and do not need a runtime key.
+
+### F. Android app → direct OTLP/HTTP logs (no `@heystack/otel` package)
 
 Signals: an Android Gradle plugin plus `AndroidManifest.xml`, Kotlin/Java Android sources, or an Android application module. Heystack currently accepts Android telemetry as standard OTLP/HTTP logs. Do not add the JavaScript SDK or use a server key.
 
@@ -350,5 +355,6 @@ Close the loop so the user (and you) can see data without leaving the editor:
 | Standalone Cloudflare Worker — runtime lacks `ctx.tracing` | `@heystack/otel/workers` with `nativeTracing: "direct"` (compatibility fallback) | `wrangler secret` |
 | Long-running Node server | `@heystack/otel/node` (`initHeystack`) | `.env` / platform env |
 | Browser / web frontend (session replay) | `@heystack/otel/web` (`instrumentWeb`, in the client entry) | public client env var; enable replay in **Settings → Session replay** |
+| Python, Rust, or WebAssembly | Their OpenTelemetry SDK → direct OTLP/HTTP traces/logs; no Heystack JavaScript SDK | server key in the runtime secret store |
 | Android app | Direct OTLP/HTTP JSON to `/v1/logs`; no Heystack package | `hs_android_…` injected from release CI into the app build |
 | Just need the export URL/headers | `@heystack/otel` (`buildExporterConfig`) | n/a (pure) |

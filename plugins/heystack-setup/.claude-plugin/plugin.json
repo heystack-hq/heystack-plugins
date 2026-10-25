@@ -1,7 +1,7 @@
 {
   "name": "heystack-setup",
   "description": "Set up Heystack observability \u2014 Android OTLP logs, native Cloudflare Workers, Agents, Next.js, Node, and browser telemetry. Skill only; install `heystack` for the MCP server too.",
-  "version": "0.6.0",
+  "version": "0.6.2",
   "author": {
     "name": "Heystack"
   },

@@ -1,7 +1,7 @@
 {
   "name": "heystack",
   "description": "Heystack observability for your coding agent: hosted MCP server (investigate incidents, traces, sessions, AI usage; manage apps, keys, alerts) plus the heystack-setup and heystack-investigate skills.",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "author": {
     "name": "Heystack"
   },

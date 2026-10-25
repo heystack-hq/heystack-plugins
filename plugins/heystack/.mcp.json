@@ -2,7 +2,7 @@
   "mcpServers": {
     "heystack": {
       "type": "http",
-      "url": "https://mcp.heystack.dev/mcp?toolsets=all"
+      "url": "https://mcp.heystack.dev/mcp?toolsets=core,manage"
     }
   }
 }

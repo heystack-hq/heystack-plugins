@@ -59,11 +59,13 @@ Heystack is observability + security for AI apps. JavaScript runtimes use the ru
 
 ## Step 0 — Get the ingest key (never hardcode it)
 
-**If the Heystack MCP server is connected** (you have tools whose names start with `heystack`): don't ask the user for a key. Call `heystack_whoami`, then `heystack_list_apps`; if no app matches this project, call `heystack_create_app` (`manage` toolset) with a `name` and `service_name` matching the repo — confirm the names with the user first. It returns the server ingest key **once**: write it straight to `.env` / the platform secret store (never to source, never echo it more than needed). For a Mobile (Android/iOS) key use `heystack_create_key` with `class: "android"` / `"ios"`. Then continue at Step 1. If the tools aren't available, the [`heystack-investigate` skill](https://heystack.dev/heystack-investigate.md) lists the one-line connect command per client.
+**If the Heystack MCP server is connected** (you have tools whose names start with `heystack`): don't ask the user for a key. Call `heystack_whoami`, then `heystack_list_apps`; if no app matches this project, call `heystack_create_app` (`manage` toolset) with a `name` and `service_name` matching the repo — confirm the names with the user first. It returns the server ingest key **once**: write it straight to `.env` / the platform secret store (never to source, never echo it more than needed). For browser code (section D) mint a **Browser key** with `heystack_create_key` `class: "web"`; for a Mobile (Android/iOS) key use `class: "android"` / `"ios"`. Then continue at Step 1. If the tools aren't available, the [`heystack-investigate` skill](https://heystack.dev/heystack-investigate.md) lists the one-line connect command per client.
 
 Otherwise the user creates an app in the Heystack console (https://console.heystack.dev). Choose the credential for the runtime:
 
 - Node, Next.js, direct Workers, and server-side SDKs use a **server key** (`sk_live_…`). Read it from `HEYSTACK_API_KEY`; never embed it in client code.
+- Browser code (`@heystack/otel/web`: replay, browser errors, `reportBug`, client spans) uses a **Browser key** (`hs_web_…`). Mint it from the app's **Settings → Ingest keys → Browser key**. It is public and write-only: ingest accepts it only on the browser telemetry paths (traces, logs, replay, bug reports) and rejects it on every read/management API and on dSYM upload, so it is safe in a client bundle (`NEXT_PUBLIC_HEYSTACK_WEB_KEY` / `VITE_HEYSTACK_WEB_KEY`).
+- **Never put a server key (`sk_live_…`) in browser code** or in any `NEXT_PUBLIC_` / `VITE_` / `REACT_APP_` / `PUBLIC_` env var — everything in a client bundle is public. If you find one already shipped to a browser, switch that code to a Browser key and tell the user to **revoke and rotate** the exposed server key in Settings.
 - Android uses a **Mobile (Android) key** (`hs_android_…`). Mint it from the app's **Settings** tab. It is public and ingest-only, so it is safe in a distributed app but cannot perform privileged operations. Keep the raw value out of source history and inject it from the release CI secret store.
 - Cloudflare native mode stores its bearer token only in the destination header in the Cloudflare dashboard.
 
@@ -222,7 +224,7 @@ Signals: a client-rendered web app — a Vite/CRA SPA, or the **client** of a Ne
 import { instrumentWeb } from "@heystack/otel/web";
 
 await instrumentWeb({
-  apiKey: import.meta.env.VITE_HEYSTACK_API_KEY, // same ingest key; exposed to the client build
+  apiKey: import.meta.env.VITE_HEYSTACK_WEB_KEY, // public Browser key (hs_web_…) — NEVER the sk_live_ server key
   service: "my-web-app",
 });
 ```
@@ -241,14 +243,14 @@ await reportBug({ message: userText, email: currentUser?.email, context: { scree
 
 **Framework placement — it MUST run in the browser:**
 - **Vite / CRA** — call it in the client entry (`main.tsx`), as above.
-- **Next.js (App Router)** — a server component can't call it. Put it in a `"use client"` component that runs `instrumentWeb()` from a `useEffect`, then mount that once in `app/layout.tsx`, keyed on `process.env.NEXT_PUBLIC_HEYSTACK_API_KEY`:
+- **Next.js (App Router)** — a server component can't call it. Put it in a `"use client"` component that runs `instrumentWeb()` from a `useEffect`, then mount that once in `app/layout.tsx`, keyed on `process.env.NEXT_PUBLIC_HEYSTACK_WEB_KEY` (a Browser key; the server side keeps `HEYSTACK_API_KEY` without a public prefix):
 ```tsx
 "use client";
 import { useEffect } from "react";
 import { instrumentWeb } from "@heystack/otel/web";
 export function HeystackReplay() {
   useEffect(() => {
-    const apiKey = process.env.NEXT_PUBLIC_HEYSTACK_API_KEY;
+    const apiKey = process.env.NEXT_PUBLIC_HEYSTACK_WEB_KEY; // hs_web_… Browser key
     if (!apiKey) return;
     let stop: (() => void) | undefined, cancelled = false;
     instrumentWeb({ apiKey, service: "my-web-app" }).then((s) => (cancelled ? s() : (stop = s))).catch(() => {});
@@ -258,7 +260,7 @@ export function HeystackReplay() {
 }
 ```
 
-> Note: the browser bundle includes the ingest key, so a `/web` key is necessarily public — that's expected for client telemetry (use a dedicated, rotatable key). Sampling/masking are enforced server-side from the console config.
+> Note: the browser bundle includes the key, so it is necessarily public. That is why `/web` uses a dedicated **Browser key** (`hs_web_…`): it can only send browser telemetry and cannot read data, manage the app or upload dSYMs. Never use the `sk_live_` server key here. Sampling/masking are enforced server-side from the console config.
 
 ### E. Python, Rust, and WebAssembly → standard OTLP (no JavaScript SDK)
 
@@ -320,7 +322,7 @@ Wire them from the build/deploy environment (e.g. `build: process.env.GIT_SHA`, 
 
 ## Step 3 — Set the environment variable
 
-- Local: `.env` / `.env.local` with `HEYSTACK_API_KEY=sk_live_…` (ensure `.env*` is gitignored).
+- Local: `.env` / `.env.local` with `HEYSTACK_API_KEY=sk_live_…` (ensure `.env*` is gitignored). Browser code additionally gets a public Browser key: `NEXT_PUBLIC_HEYSTACK_WEB_KEY=hs_web_…` / `VITE_HEYSTACK_WEB_KEY=hs_web_…` — never a public-prefixed `sk_live_` variable.
 - Cloudflare Workers native export: store the bearer token in each Cloudflare OTel destination; there is no Worker runtime secret. Direct compatibility mode only: `wrangler secret put HEYSTACK_API_KEY`.
 - Vercel/Netlify/etc.: add `HEYSTACK_API_KEY` in the platform's env settings (and to the right environments).
 - Android: store `HEYSTACK_INGEST_KEY_ANDROID=hs_android_…` in the release CI secret store and pass it to the Gradle property used by the app. Do not add it to `gradle.properties`, source, logs, or pull-request output.
@@ -358,3 +360,20 @@ Close the loop so the user (and you) can see data without leaving the editor:
 | Python, Rust, or WebAssembly | Their OpenTelemetry SDK → direct OTLP/HTTP traces/logs; no Heystack JavaScript SDK | server key in the runtime secret store |
 | Android app | Direct OTLP/HTTP JSON to `/v1/logs`; no Heystack package | `hs_android_…` injected from release CI into the app build |
 | Just need the export URL/headers | `@heystack/otel` (`buildExporterConfig`) | n/a (pure) |
+
+
+## Product monitoring and explicit activity
+
+For usage tracking, use `@heystack/otel/product` (>=0.17.0) alongside the chosen
+runtime entry. Read https://heystack.dev/docs/product-activity. Instrument stable
+business events at authoritative outcome boundaries; tag feature and surface,
+and pass per-request/session pseudonymous identity via immutable `withContext`.
+Never store request identity globally. Metadata is opt-in through
+`allowedProperties`. Flush with the server lifecycle (`ctx.waitUntil` on Workers).
+For browser replay correlation, provide the same UUID as `instrumentWeb.sessionId`
+and product `sessionId`; rotate collectors/context on logout. Capture original
+fetch before browser tracing. Do not auto-capture form contents or reuse backend
+secrets in the browser. Native clients use existing log APIs with the same
+attribute contract. Verify a named event and its user/session/trace pivots in the
+control centre; successful export alone is not query visibility or a verified
+business outcome. Existing telemetry remains intact.

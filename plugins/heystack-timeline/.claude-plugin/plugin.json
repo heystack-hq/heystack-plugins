@@ -1,0 +1,17 @@
+{
+  "name": "heystack-timeline",
+  "description": "Optional: show your coding agent's steps (file paths and command purposes only) on the Heystack investigation timeline. Requires the heystack plugin.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Heystack"
+  },
+  "license": "MIT",
+  "homepage": "https://heystack.dev/docs/mcp",
+  "keywords": [
+    "heystack",
+    "timeline",
+    "investigation",
+    "hooks"
+  ],
+  "hooks": "./hooks/hooks.json"
+}

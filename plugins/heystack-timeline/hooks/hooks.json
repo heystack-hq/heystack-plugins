@@ -1,0 +1,87 @@
+{
+  "description": "Optional Heystack investigation timeline: file paths edited and command purposes only. Off until you enable Settings > Profile > Show my coding-agent steps.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.mjs\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:heystack:heystack",
+            "tool": "heystack_update_investigation",
+            "timeout": 5,
+            "input": {
+              "client_session_id": "${session_id}",
+              "reported_by": "hook",
+              "hook_event": "edit",
+              "path": "${tool_input.file_path}",
+              "cwd": "${cwd}"
+            }
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:heystack:heystack",
+            "tool": "heystack_update_investigation",
+            "timeout": 5,
+            "input": {
+              "client_session_id": "${session_id}",
+              "reported_by": "hook",
+              "hook_event": "command",
+              "description": "${tool_input.description}"
+            }
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:heystack:heystack",
+            "tool": "heystack_update_investigation",
+            "timeout": 5,
+            "input": {
+              "client_session_id": "${session_id}",
+              "reported_by": "hook",
+              "hook_event": "prompt_submit"
+            }
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "mcp_tool",
+            "server": "plugin:heystack:heystack",
+            "tool": "heystack_update_investigation",
+            "timeout": 5,
+            "input": {
+              "client_session_id": "${session_id}",
+              "reported_by": "hook",
+              "hook_event": "session_end"
+            }
+          }
+        ]
+      }
+    ]
+  }
+}

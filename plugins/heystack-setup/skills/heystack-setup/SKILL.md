@@ -64,9 +64,9 @@ Heystack is observability + security for AI apps. JavaScript runtimes use the ru
 Otherwise the user creates an app in the Heystack console (https://console.heystack.dev). Choose the credential for the runtime:
 
 - Node, Next.js, direct Workers, and server-side SDKs use a **server key** (`sk_live_…`). Read it from `HEYSTACK_API_KEY`; never embed it in client code.
-- Browser code (`@heystack/otel/web`: replay, browser errors, `reportBug`, client spans) uses a **Browser key** (`hs_web_…`). Mint it from the app's **Settings → Ingest keys → Browser key**. It is public and write-only: ingest accepts it only on the browser telemetry paths (traces, logs, replay, bug reports) and rejects it on every read/management API and on dSYM upload, so it is safe in a client bundle (`NEXT_PUBLIC_HEYSTACK_WEB_KEY` / `VITE_HEYSTACK_WEB_KEY`).
+- Browser code (`@heystack/otel/web`: replay, browser errors, `reportBug`, client spans) uses a **Browser key** (`hs_web_…`). Mint it under **Connection & keys → Browser key** (`/settings/app/<app id>/connection`). It is public and write-only: ingest accepts it only on the browser telemetry paths (traces, logs, replay, bug reports) and rejects it on every read/management API and on dSYM upload, so it is safe in a client bundle (`NEXT_PUBLIC_HEYSTACK_WEB_KEY` / `VITE_HEYSTACK_WEB_KEY`).
 - **Never put a server key (`sk_live_…`) in browser code** or in any `NEXT_PUBLIC_` / `VITE_` / `REACT_APP_` / `PUBLIC_` env var — everything in a client bundle is public. If you find one already shipped to a browser, switch that code to a Browser key and tell the user to **revoke and rotate** the exposed server key in Settings.
-- Android uses a **Mobile (Android) key** (`hs_android_…`). Mint it from the app's **Settings** tab. It is public and ingest-only, so it is safe in a distributed app but cannot perform privileged operations. Keep the raw value out of source history and inject it from the release CI secret store.
+- Android uses a **Mobile (Android) key** (`hs_android_…`). Mint it under **Connection & keys → Mobile key**. It is public and ingest-only, so it is safe in a distributed app but cannot perform privileged operations. Keep the raw value out of source history and inject it from the release CI secret store.
 - Cloudflare native mode stores its bearer token only in the destination header in the Cloudflare dashboard.
 
 Every raw key is shown once. **Never paste one into committed source.**
@@ -135,8 +135,10 @@ Destination names must match the dashboard. `persist = false` exports without al
 #### 2. Install the native-first SDK for business context
 
 ```bash
-npm install "@heystack/otel@>=0.15.0"
+npm install "@heystack/otel@>=0.19.0"
 ```
+
+The native-first options below (`routes`, `ai.gatewayExport`, `propagateTargets`, `nativeEnrichment`, `wrapWorkerEntrypointClass`, `wrapSqlClient`) need `>=0.19.0`. Always import from `@heystack/otel/workers` in a Worker; never import `@heystack/otel/node` there (the Node SDK cannot run on workerd).
 
 ```ts
 import { instrument, withCloudflareSpan } from "@heystack/otel/workers";
@@ -152,6 +154,7 @@ const worker = {
 export default instrument(worker, {
   service: "my-worker",
   nativeTracing: "auto", // default
+  routes: ["/users/:id", "/orders/:id/items", "/files/*"], // http.route templates, first match wins
   getUser: (request) => ({
     id: request.headers.get("x-user-id") ?? undefined,
     session: request.headers.get("x-session-id") ?? undefined,
@@ -169,6 +172,13 @@ In native mode:
 - queue and scheduled handlers are wrapped in native spans;
 - use `withCloudflareSpan(ctx, ...)` for async-safe custom spans after arbitrary `await` boundaries;
 - use `withSpan(...)` only when an active native/OTel context is already available.
+- `routes` (or `routeTemplate: (req) => string | undefined`) sets `http.route` on the Heystack request span, and on the platform request span where the runtime exposes it; without either, Heystack templates the path server-side;
+- Cloudflare spans fetch, KV, D1, R2, Durable Object storage, Queues, rate limits and service bindings itself (expected per the coverage table; verified per the live-run record). The SDK enriches only the kinds Cloudflare does not span (Workers AI, Vectorize, Workflows, Analytics Engine); override per kind with `nativeEnrichment: { ai: false }`;
+- for Hyperdrive, wrap the database client: `wrapSqlClient(client, { name: "HYPERDRIVE", dbSystem: "postgresql" })`;
+- for RPC services, export `wrapWorkerEntrypointClass(MyEntrypoint, { service: "my-worker" })`;
+- propagation is stated plainly: native mode records parent and propagation **link** attributes and never claims native trace or span ids; Cloudflare does not send W3C trace context to external hosts, so the SDK adds `traceparent` to outbound fetches, limited with `propagateTargets` (hostnames or RegExps; `[]` disables it);
+- Pages Functions are direct mode only (`nativeTracing: "direct"`, `wrangler secret put HEYSTACK_API_KEY`);
+- KV, R2 and Durable Object storage keys are hashed (prefix kept through the first `:` or `/`), and email addresses are hashed.
 
 **AI apps (LLM calls).** Outbound calls to OpenAI / Anthropic / Mistral / Google / Cloudflare AI Gateway hosts are tagged with `gen_ai.*` automatically (native span `chat <provider>`; token usage is lifted from streaming responses too, never content). If the app calls providers **through an AI gateway** (e.g. Wafer: `https://wafersecurity.ai/p/<tenant>/<provider>/…`), add `ai.gateways` so the provider can be read from the URL — grep the code for the gateway host to find the pattern:
 
@@ -179,7 +189,7 @@ export default instrument(worker, {
 });
 ```
 
-For LLM calls that do not go through `fetch` (Workers AI `env.AI.run`, SDKs with a custom transport) wrap them manually: `withSpan("chat cloudflare", genAiRequestAttrs("cloudflare", { model }), async (span) => { const out = await env.AI.run(model, input); span.setAttributes(genAiResponseAttrs("cloudflare", out)); return out; })` (both helpers are exported from `@heystack/otel/workers`). The automatic hook needs the request context to survive `await`s, i.e. the `nodejs_compat` compatibility flag; without it use `withCloudflareSpan(ctx, …)` with the same helpers. Never set `ai.captureContent: true` without the user asking for prompt/completion capture.
+Under native tracing (the default) `env.AI.run` is recorded automatically as an `ai_run` span, so do not wrap it by hand. For LLM calls that do not go through `fetch` and are not covered that way (SDKs with a custom transport, or direct mode without `instrumentBindings`) wrap them manually; if you add a manual span around `env.AI.run` under native tracing (for example to capture usage), also set `nativeEnrichment: { ai: false }` so the call is not counted twice: `withSpan("chat cloudflare", genAiRequestAttrs("cloudflare", { model }), async (span) => { const out = await env.AI.run(model, input); span.setAttributes(genAiResponseAttrs("cloudflare", out)); return out; })` (both helpers are exported from `@heystack/otel/workers`). The automatic hook needs the request context to survive `await`s, i.e. the `nodejs_compat` compatibility flag; without it use `withCloudflareSpan(ctx, …)` with the same helpers. If the Cloudflare AI Gateway already exports its own spans, set `ai: { gatewayExport: true }` so each call is counted once (by the gateway); leave it off when that export is not configured, so a call is never lost. Never set `ai.captureContent: true` without the user asking for prompt/completion capture.
 
 Set `nativeTracing: "direct"` only on a runtime where `ctx.tracing`/native export is unavailable. Direct mode requires `wrangler secret put HEYSTACK_API_KEY`, `nodejs_compat`, and may use `instrumentBindings` and sampling (AI enrichment works in both modes). Never combine direct mode with a native trace destination; that duplicates spans.
 
@@ -201,7 +211,7 @@ The adapter covers RPC, state, messages/tools, chat/recovery, fibers, scheduling
 
 #### 4. Worker metrics
 
-Cloudflare does not export metrics over OTLP. In Heystack app **Settings → Cloudflare Workers Analytics**, connect an API token with only **Account Analytics Read**, plus the account ID and optional script name. The connector imports requests, errors, subrequests, and CPU p50/p99 every five minutes. Heystack also derives RED metrics from trace spans.
+Cloudflare does not export metrics over OTLP. In Heystack app settings, open **Cloudflare** (`/settings/app/<app id>/cloudflare`) and connect an API token with only **Account Analytics Read**, plus the account ID and optional script name. The connector imports, every five minutes: Workers requests, errors, subrequests and CPU p50/p99; Queues operations, backlog and consumers; and usage for Durable Objects, D1, KV, R2, Workflows, Hyperdrive, Workers AI and AI Gateway (Explore › Workers › Cloudflare usage). Heystack also derives RED metrics from trace spans.
 
 #### 5. Validate all execution models
 
@@ -228,11 +238,11 @@ await instrumentWeb({
   service: "my-web-app",
 });
 ```
-`instrumentWeb` records session replay and injects a W3C `traceparent` on outgoing `fetch` calls so replays correlate with backend traces. It returns a `stop()` function and is a **no-op on the server** (SSR-safe). The rrweb recorder **ships inside `@heystack/otel`** (nothing else to install) and uploads **cross-origin with no CORS setup**. **Sampling and masking are controlled from the console** — tell the user to enable replay under **Settings → Session replay** for the app (nothing records until it's enabled there). Masking is strict by default (all text inputs/passwords masked); fine-tune in the DOM with `data-hs-mask` (mask an element), `data-hs-block` (block a region), `data-hs-unmask` (reveal a trusted element). The optional `sampleRate` is only a local override.
+`instrumentWeb` records session replay and injects a W3C `traceparent` on outgoing `fetch` calls so replays correlate with backend traces. It returns a `stop()` function and is a **no-op on the server** (SSR-safe). The rrweb recorder **ships inside `@heystack/otel`** (nothing else to install) and uploads **cross-origin with no CORS setup**. **Sampling and masking are controlled from the console** — tell the user to enable replay under **Data & sampling → Session replay** (`/settings/app/<app id>/data`) for the app (nothing records until it's enabled there). Masking is strict by default (all text inputs/passwords masked); fine-tune in the DOM with `data-hs-mask` (mask an element), `data-hs-block` (block a region), `data-hs-unmask` (reveal a trusted element). The optional `sampleRate` is only a local override.
 
-**Browser error collection (on by default):** `instrumentWeb` also captures uncaught errors (`window.onerror` + `unhandledrejection`) and `console.error` as logs — they appear in the app's **Logs** tab, stamped with the page URL and `session_id` (so each error links to its session replay and, if tracing is on, its trace). Options: `errors: false` to disable, `captureConsole: 'warn' | 'error' | false` (default `'error'`; `'warn'` also captures `console.warn`). Also pass `version` / `build` (release + commit) so a browser regression is attributed to the release that introduced it. Console capture is rate-capped and never traces its own upload (no self-export loop).
+**Browser error collection (on by default):** `instrumentWeb` also captures uncaught errors (`window.onerror` + `unhandledrejection`) and `console.error` as logs — they appear in **Explore › Logs**, stamped with the page URL and `session_id` (so each error links to its session replay and, if tracing is on, its trace). Options: `errors: false` to disable, `captureConsole: 'warn' | 'error' | false` (default `'error'`; `'warn'` also captures `console.warn`). Also pass `version` / `build` (release + commit) so a browser regression is attributed to the release that introduced it. Console capture is rate-capped and never traces its own upload (no self-export loop).
 
-**In-app bug reports (`reportBug`):** the `/web` entry also exports `reportBug({ message, email?, context? })` — a headless API (no widget; the app builds the button) that lets a user file a bug from inside the app. It auto-attaches the URL, replay `session_id`, active `trace_id`, `version` / `build`, and the last few captured browser errors, and the report shows up in the console **Bugs** tab already linked to the session replay and trace. Call it any time after `instrumentWeb()` (it throws before init or on an empty message; network failures are swallowed). Wire it to whatever UI you like:
+**In-app bug reports (`reportBug`):** the `/web` entry also exports `reportBug({ message, email?, context? })` — a headless API (no widget; the app builds the button) that lets a user file a bug from inside the app. It auto-attaches the URL, replay `session_id`, active `trace_id`, `version` / `build`, and the last few captured browser errors, and the report shows up in the console under **Issues** (bug reports) already linked to the session replay and trace. Call it any time after `instrumentWeb()` (it throws before init or on an empty message; network failures are swallowed). Wire it to whatever UI you like:
 
 ```ts
 import { reportBug } from "@heystack/otel/web";
@@ -270,7 +280,7 @@ For Python, Rust, WebAssembly, or another non-JavaScript runtime, use that ecosy
 
 Signals: an Android Gradle plugin plus `AndroidManifest.xml`, Kotlin/Java Android sources, or an Android application module. Heystack currently accepts Android telemetry as standard OTLP/HTTP logs. Do not add the JavaScript SDK or use a server key.
 
-1. Mint a **Mobile (Android) key** (`hs_android_…`) in the app's Heystack **Settings** tab.
+1. Mint a **Mobile (Android) key** (`hs_android_…`) under **Connection & keys → Mobile key** in the app's Heystack settings.
 2. Keep the raw value in the release CI secret store. Inject it into a `BuildConfig` field through a Gradle property; keep the default empty so local/debug builds can remain inert:
 
 ```kotlin
@@ -337,13 +347,13 @@ Run the app and make one request. Within a few seconds, traces appear in the Hey
 - On standalone Cloudflare Workers, confirm `ctx.tracing` is available and both native destinations report successful delivery. `nodejs_compat` is only required by direct compatibility mode, not the native path.
 - Heavy Node startup or overhead? Pass a slimmer `instrumentations: [...]` array to `initHeystack` instead of the default `getNodeAutoInstrumentations()` (which patches ~40 libs).
 - For a Next app on OpenNext/Cloudflare, the `/next` entry handles workerd automatically — no separate Workers wiring needed. If spans still don't show, call `flushHeystack()` from a response hook for guaranteed delivery.
-- On Android, make one consent-approved test event from a release-like build. Confirm the request returns success, then filter the app's **Logs** tab by `service.name` and `event.name`. A debug build with an intentionally empty key should stay inert.
+- On Android, make one consent-approved test event from a release-like build. Confirm the request returns success, then filter **Explore › Logs** by `service.name` and `event.name`. A debug build with an intentionally empty key should stay inert.
 
 ## Step 5 — Connect the MCP server and verify end to end
 
 Close the loop so the user (and you) can see data without leaving the editor:
 
-1. If the Heystack MCP tools (names starting with `heystack`) aren't available yet, connect the Heystack MCP server — Claude Code: `claude mcp add --transport http heystack https://mcp.heystack.dev/mcp` (then `/mcp` to sign in), or the plugin `/plugin install heystack@heystack` from `heystack-hq/heystack-plugins`; other clients: the **Agents & API** page in the console (https://console.heystack.dev/agents) has the snippet per client.
+1. If the Heystack MCP tools (names starting with `heystack`) aren't available yet, connect the Heystack MCP server — Claude Code: `claude mcp add --transport http heystack https://mcp.heystack.dev/mcp` (then `/mcp` to sign in), or the plugin `/plugin install heystack@heystack` from `heystack-hq/heystack-plugins`; other clients: **Settings › Organisation › Coding agents & API** in the console (https://console.heystack.dev/settings/org/agents) has the snippet per client.
 2. Run `heystack_verify_setup` with the app id (from `heystack_list_apps`) and `wait_seconds: 120`. It polls until telemetry arrives and returns pass/warn/fail checks per signal (traces, logs, metrics, releases, gen-AI enrichment, sampling, replay) with concrete fixes; apply them, make one more request, and run it again.
 3. Hand the user the returned `console_url` so they can see their first data. From here the `heystack-investigate` skill takes over for "why is X broken?" questions.
 
@@ -356,7 +366,7 @@ Close the loop so the user (and you) can see data without leaving the editor:
 | Standalone Cloudflare Worker — custom business spans in that native tree | `@heystack/otel/workers` (`instrument` + `withCloudflareSpan`) with native export still authoritative | Same CF dashboard destinations; no runtime key |
 | Standalone Cloudflare Worker — runtime lacks `ctx.tracing` | `@heystack/otel/workers` with `nativeTracing: "direct"` (compatibility fallback) | `wrangler secret` |
 | Long-running Node server | `@heystack/otel/node` (`initHeystack`) | `.env` / platform env |
-| Browser / web frontend (session replay) | `@heystack/otel/web` (`instrumentWeb`, in the client entry) | public client env var; enable replay in **Settings → Session replay** |
+| Browser / web frontend (session replay) | `@heystack/otel/web` (`instrumentWeb`, in the client entry) | public client env var; enable replay in **Data & sampling → Session replay** |
 | Python, Rust, or WebAssembly | Their OpenTelemetry SDK → direct OTLP/HTTP traces/logs; no Heystack JavaScript SDK | server key in the runtime secret store |
 | Android app | Direct OTLP/HTTP JSON to `/v1/logs`; no Heystack package | `hs_android_…` injected from release CI into the app build |
 | Just need the export URL/headers | `@heystack/otel` (`buildExporterConfig`) | n/a (pure) |
@@ -375,5 +385,5 @@ and product `sessionId`; rotate collectors/context on logout. Capture original
 fetch before browser tracing. Do not auto-capture form contents or reuse backend
 secrets in the browser. Native clients use existing log APIs with the same
 attribute contract. Verify a named event and its user/session/trace pivots in the
-control centre; successful export alone is not query visibility or a verified
+console (Users & sessions › Activity); successful export alone is not query visibility or a verified
 business outcome. Existing telemetry remains intact.

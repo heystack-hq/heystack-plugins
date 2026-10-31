@@ -21,6 +21,13 @@ Then run `/mcp` to sign in with Heystack and pick your organization. Try: *"list
 
 **`heystack-setup`** — the setup skill on its own (no MCP server), kept for existing installs: `/plugin install heystack-setup@heystack`.
 
+**`heystack-timeline`** (optional, requires `heystack`) — `/plugin install heystack-timeline@heystack`. Hooks that show your coding agent's steps on the Heystack investigation timeline.
+
+- **Opt-in:** nothing is recorded until you switch on **Show my coding-agent steps** in the Heystack console (Settings, Profile). Turning it off deletes the recorded steps.
+- **Privacy:** only the file path of an edit and the one-line description of a shell command are sent. Never file contents, diffs, command lines, prompts or tool output. Absolute paths transit TLS to Heystack and are reduced to repo-relative paths before storage; paths outside the project are dropped.
+- **Best-effort:** Claude Code gives session-end hooks about 1.5 seconds, so the closing call may not land; the investigation then just goes idle. A shell command without a description records no step.
+- Requires write access on your Heystack connection; it reuses the `heystack` plugin's MCP sign-in.
+
 ## Other agents
 
 - Cursor / VS Code / Codex / Gemini CLI / Claude.ai connect to the same MCP URL — see https://heystack.dev/docs/mcp for one-click links and commands.
@@ -30,9 +37,10 @@ Then run `/mcp` to sign in with Heystack and pick your organization. Try: *"list
 ## Layout
 
 ```
-.claude-plugin/marketplace.json           # Claude Code marketplace (plugins: heystack, heystack-setup)
+.claude-plugin/marketplace.json           # Claude Code marketplace (plugins: heystack, heystack-setup, heystack-timeline)
 plugins/heystack/                         # all-in-one: .mcp.json + skills/
 plugins/heystack-setup/                   # skill-only (legacy)
+plugins/heystack-timeline/                # optional hooks: edit paths + command purposes
 plugin.json · mcp.json · skills/          # Agent Plugins (cross-vendor) layout of the `heystack` plugin
 ```
 

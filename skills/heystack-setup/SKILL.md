@@ -135,10 +135,10 @@ Destination names must match the dashboard. `persist = false` exports without al
 #### 2. Install the native-first SDK for business context
 
 ```bash
-npm install "@heystack/otel@>=0.19.0"
+npm install "@heystack/otel@>=0.19.1"
 ```
 
-The native-first options below (`routes`, `ai.gatewayExport`, `propagateTargets`, `nativeEnrichment`, `wrapWorkerEntrypointClass`, `wrapSqlClient`) need `>=0.19.0`. Always import from `@heystack/otel/workers` in a Worker; never import `@heystack/otel/node` there (the Node SDK cannot run on workerd).
+The native-first options below (`routes`, `ai.gatewayExport`, `propagateTargets`, `nativeEnrichment`, `wrapWorkerEntrypointClass`, `wrapSqlClient`) need `>=0.19.1`. Always import from `@heystack/otel/workers` in a Worker; never import `@heystack/otel/node` there (the Node SDK cannot run on workerd).
 
 ```ts
 import { instrument, withCloudflareSpan } from "@heystack/otel/workers";

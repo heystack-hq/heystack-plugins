@@ -21,8 +21,8 @@ description: >-
      0.15.0: direct Workers instrumentation now covers D1 sessions and batches alongside prepared statements, plus the existing KV, R2, Vectorize, AI, Queue and Service bindings. Native Cloudflare OTel remains the preferred path for Workers: it exports Cloudflare's platform trace/log tree; direct SDK mode is only for runtimes without native tracing.
      0.14.0: gen_ai enrichment now works under Cloudflare NATIVE tracing (LLM-only
      fetch hook; other subrequests untouched); new provider Mistral; `ai.gateways`
-     resolves the provider from an AI-gateway URL (Wafer: hostSuffix
-     "wafersecurity.ai" + pathPattern "/p/:tenant/:provider"); streaming (SSE)
+     resolves the provider from an AI-gateway URL (e.g. hostSuffix
+     "gateway.example.com" + pathPattern "/p/:tenant/:provider"); streaming (SSE)
      responses yield token usage without reading content; genAiRequestAttrs /
      genAiResponseAttrs exported for manual withSpan around env.AI.run. OTel 2.x
      SDK deps (Node >= 18.19 on /node + /next).
@@ -55,7 +55,7 @@ description: >-
 
 Heystack is observability + security for AI apps. JavaScript runtimes use the runtime-aware `@heystack/otel` package. Android apps send standard OTLP/HTTP JSON directly to `https://ingest.heystack.dev/v1/logs`; there is no Heystack Android package to install. **Using the wrong JavaScript entry breaks the app or silently sends nothing**, so detect the runtime first.
 
-> **Requires `@heystack/otel` `>=0.15.0` (prefer latest).** 0.15 extends direct Workers coverage to D1 sessions and batches. For Workers, Cloudflare native OTel is still the preferred path: it exports the platform trace and log tree, while the SDK adds business context. Direct SDK export is only a compatibility fallback when native tracing is unavailable.
+> **Requires `@heystack/otel` `>=0.19.1` (prefer latest).** For Workers, Cloudflare native OTel is still the preferred path: it exports the platform trace and log tree, while the SDK adds business context. Direct SDK export is only a compatibility fallback when native tracing is unavailable.
 
 ## Step 0 — Get the ingest key (never hardcode it)
 
@@ -77,14 +77,14 @@ Look for `settings.gradle`, `settings.gradle.kts`, `build.gradle`, or `build.gra
 
 For JavaScript runtimes, check the lockfile in the project root:
 
-Install with the `>=0.15.0` pin:
+Install with the `>=0.19.1` pin:
 
 | Lockfile | Manager | Install command |
 |---|---|---|
-| `pnpm-lock.yaml` | pnpm | `pnpm add "@heystack/otel@>=0.15.0"` |
-| `yarn.lock` | yarn | `yarn add "@heystack/otel@>=0.15.0"` |
-| `bun.lockb` | bun | `bun add "@heystack/otel@>=0.15.0"` |
-| `package-lock.json` (or none) | npm | `npm install "@heystack/otel@>=0.15.0"` |
+| `pnpm-lock.yaml` | pnpm | `pnpm add "@heystack/otel@>=0.19.1"` |
+| `yarn.lock` | yarn | `yarn add "@heystack/otel@>=0.19.1"` |
+| `bun.lockb` | bun | `bun add "@heystack/otel@>=0.19.1"` |
+| `package-lock.json` (or none) | npm | `npm install "@heystack/otel@>=0.19.1"` |
 
 ## Step 2 — Detect the runtime, then apply the matching pattern
 
@@ -180,12 +180,12 @@ In native mode:
 - Pages Functions are direct mode only (`nativeTracing: "direct"`, `wrangler secret put HEYSTACK_API_KEY`);
 - KV, R2 and Durable Object storage keys are hashed (prefix kept through the first `:` or `/`), and email addresses are hashed.
 
-**AI apps (LLM calls).** Outbound calls to OpenAI / Anthropic / Mistral / Google / Cloudflare AI Gateway hosts are tagged with `gen_ai.*` automatically (native span `chat <provider>`; token usage is lifted from streaming responses too, never content). If the app calls providers **through an AI gateway** (e.g. Wafer: `https://wafersecurity.ai/p/<tenant>/<provider>/…`), add `ai.gateways` so the provider can be read from the URL — grep the code for the gateway host to find the pattern:
+**AI apps (LLM calls).** Outbound calls to OpenAI / Anthropic / Mistral / Google / Cloudflare AI Gateway hosts are tagged with `gen_ai.*` automatically (native span `chat <provider>`; token usage is lifted from streaming responses too, never content). If the app calls providers **through an AI gateway** (e.g. `https://gateway.example.com/p/<tenant>/<provider>/…`), add `ai.gateways` so the provider can be read from the URL — grep the code for the gateway host to find the pattern:
 
 ```ts
 export default instrument(worker, {
   service: "my-worker",
-  ai: { gateways: [{ hostSuffix: "wafersecurity.ai", pathPattern: "/p/:tenant/:provider" }] },
+  ai: { gateways: [{ hostSuffix: "gateway.example.com", pathPattern: "/p/:tenant/:provider" }] },
 });
 ```
 
@@ -238,7 +238,7 @@ await instrumentWeb({
   service: "my-web-app",
 });
 ```
-`instrumentWeb` records session replay and injects a W3C `traceparent` on outgoing `fetch` calls so replays correlate with backend traces. It returns a `stop()` function and is a **no-op on the server** (SSR-safe). The rrweb recorder **ships inside `@heystack/otel`** (nothing else to install) and uploads **cross-origin with no CORS setup**. **Sampling and masking are controlled from the console** — tell the user to enable replay under **Data & sampling → Session replay** (`/settings/app/<app id>/data`) for the app (nothing records until it's enabled there). Masking is strict by default (all text inputs/passwords masked); fine-tune in the DOM with `data-hs-mask` (mask an element), `data-hs-block` (block a region), `data-hs-unmask` (reveal a trusted element). The optional `sampleRate` is only a local override.
+`instrumentWeb` records session replay and injects a W3C `traceparent` on outgoing `fetch` calls so replays correlate with backend traces. It returns a `stop()` function and is a **no-op on the server** (SSR-safe). The rrweb recorder **ships inside `@heystack/otel`** (nothing else to install) and uploads **cross-origin with no CORS setup**. **Sampling and masking are controlled from the console** — tell the user to enable replay under **Data & privacy → Session replay** (`/settings/app/<app id>/data`) for the app (nothing records until it's enabled there). Masking is strict by default (all text inputs/passwords masked); fine-tune in the DOM with `data-hs-mask` (mask an element), `data-hs-block` (block a region), `data-hs-unmask` (reveal a trusted element). The optional `sampleRate` is only a local override.
 
 **Browser error collection (on by default):** `instrumentWeb` also captures uncaught errors (`window.onerror` + `unhandledrejection`) and `console.error` as logs — they appear in **Explore › Logs**, stamped with the page URL and `session_id` (so each error links to its session replay and, if tracing is on, its trace). Options: `errors: false` to disable, `captureConsole: 'warn' | 'error' | false` (default `'error'`; `'warn'` also captures `console.warn`). Also pass `version` / `build` (release + commit) so a browser regression is attributed to the release that introduced it. Console capture is rate-capped and never traces its own upload (no self-export loop).
 
@@ -339,11 +339,11 @@ Wire them from the build/deploy environment (e.g. `build: process.env.GIT_SHA`, 
 
 ## Step 4 — Verify
 
-Run the app and make one request. Within a few seconds, traces appear in the Heystack console under the app whose `service` name you set. If nothing shows:
+Run the app and make one request. Data usually appears in the Heystack console within a minute (it is stored in batches up to 30 seconds apart), listed under the app whose `service` name you set. If nothing shows:
 - Confirm `HEYSTACK_API_KEY` is actually set in the running environment.
 - For `@heystack/otel/node`, pass `debug: true` to see OTel export logs.
 - Confirm the `service` here matches the app's service name in the console.
-- Confirm `@heystack/otel` is `>=0.7.0` (0.7.0 adds remote sampling; 0.6.0 adds head sampling; 0.5.0 adds identity enrichment, binding tracing, outbound-fetch spans, and manual span helpers; older versions silently send nothing on OpenNext/workerd or — pre-0.3.2 — can loop the ingest POST).
+- Confirm `@heystack/otel` is `>=0.19.1` (older versions miss current runtime coverage; very old ones silently send nothing on OpenNext/workerd or — pre-0.3.2 — can loop the ingest POST).
 - On standalone Cloudflare Workers, confirm `ctx.tracing` is available and both native destinations report successful delivery. `nodejs_compat` is only required by direct compatibility mode, not the native path.
 - Heavy Node startup or overhead? Pass a slimmer `instrumentations: [...]` array to `initHeystack` instead of the default `getNodeAutoInstrumentations()` (which patches ~40 libs).
 - For a Next app on OpenNext/Cloudflare, the `/next` entry handles workerd automatically — no separate Workers wiring needed. If spans still don't show, call `flushHeystack()` from a response hook for guaranteed delivery.
@@ -366,7 +366,7 @@ Close the loop so the user (and you) can see data without leaving the editor:
 | Standalone Cloudflare Worker — custom business spans in that native tree | `@heystack/otel/workers` (`instrument` + `withCloudflareSpan`) with native export still authoritative | Same CF dashboard destinations; no runtime key |
 | Standalone Cloudflare Worker — runtime lacks `ctx.tracing` | `@heystack/otel/workers` with `nativeTracing: "direct"` (compatibility fallback) | `wrangler secret` |
 | Long-running Node server | `@heystack/otel/node` (`initHeystack`) | `.env` / platform env |
-| Browser / web frontend (session replay) | `@heystack/otel/web` (`instrumentWeb`, in the client entry) | public client env var; enable replay in **Data & sampling → Session replay** |
+| Browser / web frontend (session replay) | `@heystack/otel/web` (`instrumentWeb`, in the client entry) | public client env var; enable replay in **Data & privacy → Session replay** |
 | Python, Rust, or WebAssembly | Their OpenTelemetry SDK → direct OTLP/HTTP traces/logs; no Heystack JavaScript SDK | server key in the runtime secret store |
 | Android app | Direct OTLP/HTTP JSON to `/v1/logs`; no Heystack package | `hs_android_…` injected from release CI into the app build |
 | Just need the export URL/headers | `@heystack/otel` (`buildExporterConfig`) | n/a (pure) |
